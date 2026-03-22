@@ -296,7 +296,11 @@ def identify():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"Database path : {DB_PATH}")
-    print(f"DB exists     : {DB_PATH.exists()}")
+    if _db.is_postgres():
+        print("Database      : Postgres (DATABASE_URL)")
+    else:
+        db_path = _db._sqlite_path()
+        print(f"Database path : {db_path}")
+        print(f"DB exists     : {db_path.exists()}")
     print(f"Claude API key: {'set' if ANTHROPIC_API_KEY else 'NOT SET (photo ID disabled)'}")
     app.run(host="0.0.0.0", port=5000, debug=True)
