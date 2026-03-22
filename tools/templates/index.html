@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PCGS Coin Price Lookup</title>
+  <style>
+    /* ── Reset & base ────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --border:    #2e3250;
+      --accent:    #4f8ef7;
+      --accent-dk: #3a72d8;
+      --text:      #e2e6f0;
+      --muted:     #7a82a0;
+      --green:     #3ecf8e;
+      --red:       #f76060;
+      --radius:    10px;
+      --shadow:    0 4px 24px rgba(0,0,0,.45);
+    }
+
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px 60px;
+      line-height: 1.55;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+
+    /* ── Layout ──────────────────────────────────────────────────── */
+    .container { max-width: 860px; margin: 0 auto; }
+
+    /* ── Header ──────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+      padding: 32px 0 28px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      color: var(--text);
+    }
+    header h1 span { color: var(--accent); }
+    .db-stats {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: .82rem;
+      color: var(--muted);
+    }
+    .db-stats .dot { color: var(--green); margin: 0 4px; }
+
+    /* ── Card ────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 16px;
+    }
+
+    /* ── Search row ──────────────────────────────────────────────── */
+    .search-row {
+      display: flex;
+      gap: 10px;
+    }
+    .search-row input[type="text"] {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: .97rem;
+      color: var(--text);
+      outline: none;
+      transition: border-color .15s;
+    }
+    .search-row input[type="text"]:focus { border-color: var(--accent); }
+    .search-row input[type="text"]::placeholder { color: var(--muted); }
+
+    /* ── Buttons ─────────────────────────────────────────────────── */
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 20px;
+      font-size: .93rem;
+      font-weight: 600;
+      transition: background .15s, opacity .15s;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dk); }
+
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
+
+    /* ── Drop zone ───────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+      color: var(--muted);
+      font-size: .93rem;
+      margin-bottom: 14px;
+    }
+    .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(79,142,247,.06);
+    }
+    .drop-zone .dz-icon {
+      font-size: 2.4rem;
+      display: block;
+      margin-bottom: 8px;
+      user-select: none;
+    }
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    .preview-img {
+      display: none;
+      max-height: 180px;
+      max-width: 100%;
+      border-radius: 6px;
+      margin: 0 auto 12px;
+      border: 1px solid var(--border);
+    }
+    .preview-img.visible { display: block; }
+
+    .photo-actions { display: flex; gap: 10px; }
+
+    /* ── Status / error ──────────────────────────────────────────── */
+    .status {
+      font-size: .88rem;
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-top: 12px;
+      display: none;
+    }
+    .status.show { display: block; }
+    .status.error { background: rgba(247,96,96,.12); color: var(--red); border: 1px solid rgba(247,96,96,.3); }
+    .status.info  { background: rgba(79,142,247,.1);  color: var(--accent); border: 1px solid rgba(79,142,247,.3); }
+    .status.ok    { background: rgba(62,207,142,.1);  color: var(--green);  border: 1px solid rgba(62,207,142,.3); }
+
+    /* ── Results ─────────────────────────────────────────────────── */
+    #results { display: none; }
+    #results.show { display: block; }
+
+    .results-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .results-header h2 { font-size: 1.05rem; color: var(--text); }
+    .results-count {
+      font-size: .82rem;
+      color: var(--muted);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 12px;
+    }
+
+    /* ── AI identification block ─────────────────────────────────── */
+    .ai-id-block {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      font-size: .91rem;
+    }
+    .ai-id-block h3 {
+      font-size: .82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    .ai-id-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 10px;
+    }
+    .ai-id-field label {
+      display: block;
+      font-size: .75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 3px;
+    }
+    .ai-id-field span {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .ai-id-notes {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: .86rem;
+      font-style: italic;
+    }
+
+    /* ── Coin card ───────────────────────────────────────────────── */
+    .coin-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .coin-header {
+      background: var(--surface2);
+      padding: 14px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--border);
+    }
+    .coin-header .coin-name {
+      flex: 1;
+      min-width: 200px;
+      font-weight: 700;
+      font-size: 1.03rem;
+      color: var(--text);
+    }
+    .tag {
+      display: inline-block;
+      font-size: .75rem;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      white-space: nowrap;
+    }
+    .tag-pcgs   { background: rgba(79,142,247,.18); color: var(--accent); border: 1px solid rgba(79,142,247,.3); }
+    .tag-desig  { background: rgba(62,207,142,.15); color: var(--green);  border: 1px solid rgba(62,207,142,.3); }
+    .tag-cat    { background: rgba(255,255,255,.06); color: var(--muted);  border: 1px solid var(--border); }
+
+    .coin-body { padding: 18px; }
+
+    /* ── Price table ─────────────────────────────────────────────── */
+    .price-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .88rem;
+    }
+    .price-table thead th {
+      background: var(--surface2);
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: .75rem;
+      letter-spacing: .06em;
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .price-table tbody tr { border-bottom: 1px solid var(--border); }
+    .price-table tbody tr:last-child { border-bottom: none; }
+    .price-table tbody tr:hover { background: rgba(255,255,255,.02); }
+    .price-table td { padding: 8px 12px; }
+    .price-table .grade { font-weight: 600; color: var(--accent); }
+    .price-table .price-val { color: var(--green); font-weight: 600; font-family: monospace; }
+    .price-table .no-price { color: var(--muted); }
+
+    .no-prices { color: var(--muted); font-style: italic; font-size: .88rem; }
+
+    /* ── No results ──────────────────────────────────────────────── */
+    .no-results {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--muted);
+    }
+    .no-results .nr-icon { font-size: 2.5rem; margin-bottom: 12px; }
+    .no-results p { font-size: 1rem; }
+
+    /* ── Spinner ─────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Footer ──────────────────────────────────────────────────── */
+    footer {
+      text-align: center;
+      margin-top: 48px;
+      color: var(--muted);
+      font-size: .8rem;
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header>
+    <h1>PCGS <span>Coin Price</span> Lookup</h1>
+    {% if stats %}
+    <div class="db-stats">
+      {{ "{:,}".format(stats.coins) }} coins
+      <span class="dot">&#x25cf;</span>
+      {{ "{:,}".format(stats.prices) }} price points
+      <span class="dot">&#x25cf;</span>
+      updated {{ stats.scraped_at }}
+    </div>
+    {% else %}
+    <div class="db-stats" style="color:#f76060;">
+      Database not found &mdash; run the scraper first.
+    </div>
+    {% endif %}
+  </header>
+
+  <!-- Text search card -->
+  <div class="card">
+    <h2>Search by Description or PCGS#</h2>
+    <div class="search-row">
+      <input
+        type="text"
+        id="searchInput"
+        placeholder="e.g.  1909 S VDB   or   Morgan Dollar 1881   or   PCGS# 2050"
+        autocomplete="off"
+      />
+      <button class="btn-primary" id="searchBtn" onclick="doSearch()">Search</button>
+    </div>
+    <div id="searchStatus" class="status"></div>
+  </div>
+
+  <!-- Photo identification card -->
+  <div class="card">
+    <h2>Identify Coin from Photo</h2>
+    <div class="drop-zone" id="dropZone">
+      <span class="dz-icon">&#x1F4F7;</span>
+      <strong>Drop a coin photo here</strong><br>
+      <span>or click to browse &mdash; JPG / PNG accepted</span>
+      <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" />
+    </div>
+    <!-- Hidden input that opens the camera directly on mobile -->
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;" />
+    <img id="previewImg" class="preview-img" alt="Preview" />
+    <div class="photo-actions">
+      <button class="btn-secondary" id="cameraBtn" onclick="openCamera()">
+        &#x1F4F8; Take Photo
+      </button>
+      <button class="btn-primary" id="identifyBtn" onclick="doIdentify()" disabled>
+        Identify Coin
+      </button>
+      <button class="btn-secondary" id="clearPhotoBtn" onclick="clearPhoto()" style="display:none;">
+        Clear
+      </button>
+    </div>
+    <div id="photoStatus" class="status"></div>
+  </div>
+
+  <!-- Results section -->
+  <section id="results">
+    <div class="results-header">
+      <h2 id="resultsTitle">Results</h2>
+      <span class="results-count" id="resultsCount"></span>
+    </div>
+    <div id="aiIdentification"></div>
+    <div id="resultsList"></div>
+  </section>
+
+</div><!-- /container -->
+
+<footer>
+  PCGS Coin Price Lookup &mdash; powered by local SQLite database &amp; Claude Vision
+</footer>
+
+<script>
+/* ------------------------------------------------------------------ */
+/* Utility helpers                                                      */
+/* ------------------------------------------------------------------ */
+
+function showStatus(id, msg, type) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = `status show ${type}`;
+}
+function hideStatus(id) {
+  const el = document.getElementById(id);
+  el.className = "status";
+  el.textContent = "";
+}
+
+function formatPrice(val) {
+  if (val === null || val === undefined || val === "") return null;
+  const n = Number(val);
+  if (isNaN(n)) return null;
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+/* ------------------------------------------------------------------ */
+/* Text search                                                          */
+/* ------------------------------------------------------------------ */
+
+document.getElementById("searchInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") doSearch();
+});
+
+async function doSearch() {
+  const q = document.getElementById("searchInput").value.trim();
+  if (!q) { showStatus("searchStatus", "Please enter a search term.", "error"); return; }
+
+  const btn = document.getElementById("searchBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Searching…';
+  hideStatus("searchStatus");
+
+  try {
+    const resp = await fetch("/search", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ query: q }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      showStatus("searchStatus", data.error || "Search failed.", "error");
+      hideResults();
+      return;
+    }
+
+    renderResults(data.results, data.total, `Results for: "${data.query}"`, null);
+
+    if (data.total === 0) {
+      showStatus("searchStatus", `No results found for "${q}".`, "info");
+    }
+  } catch (err) {
+    showStatus("searchStatus", "Network error: " + err.message, "error");
+    hideResults();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo identification                                                 */
+/* ------------------------------------------------------------------ */
+
+const dropZone    = document.getElementById("dropZone");
+const photoInput  = document.getElementById("photoInput");
+const cameraInput = document.getElementById("cameraInput");
+const previewImg  = document.getElementById("previewImg");
+let   selectedFile = null;
+
+// File input change (browse)
+photoInput.addEventListener("change", () => {
+  if (photoInput.files[0]) loadPreview(photoInput.files[0]);
+});
+
+// Camera input change
+cameraInput.addEventListener("change", () => {
+  if (cameraInput.files[0]) loadPreview(cameraInput.files[0]);
+});
+
+function openCamera() {
+  cameraInput.value = "";
+  cameraInput.click();
+}
+
+// Drag-and-drop
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("dragover"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("dragover");
+  const f = e.dataTransfer.files[0];
+  if (f) loadPreview(f);
+});
+
+function loadPreview(file) {
+  selectedFile = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    previewImg.src = ev.target.result;
+    previewImg.classList.add("visible");
+  };
+  reader.readAsDataURL(file);
+  document.getElementById("identifyBtn").disabled = false;
+  document.getElementById("clearPhotoBtn").style.display = "";
+  hideStatus("photoStatus");
+}
+
+function clearPhoto() {
+  selectedFile = null;
+  previewImg.src = "";
+  previewImg.classList.remove("visible");
+  photoInput.value = "";
+  document.getElementById("identifyBtn").disabled = true;
+  document.getElementById("clearPhotoBtn").style.display = "none";
+  hideStatus("photoStatus");
+  hideResults();
+}
+
+async function doIdentify() {
+  if (!selectedFile) { showStatus("photoStatus", "Please select a photo first.", "error"); return; }
+
+  const btn = document.getElementById("identifyBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Identifying…';
+  hideStatus("photoStatus");
+
+  const form = new FormData();
+  form.append("photo", selectedFile);
+
+  try {
+    const resp = await fetch("/identify", { method: "POST", body: form });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      showStatus("photoStatus", data.error || "Identification failed.", "error");
+      hideResults();
+      return;
+    }
+
+    const idBlock = data.identification;
+    renderResults(
+      data.results,
+      data.total,
+      `Matches for identified coin`,
+      idBlock
+    );
+
+    if (data.warning) {
+      showStatus("photoStatus", data.warning, "info");
+    } else if (data.total === 0) {
+      showStatus("photoStatus", `Coin identified — no DB matches for "${data.query}". Try a text search.`, "info");
+    } else {
+      showStatus("photoStatus", `Identified: ${idBlock.description_query || "unknown"} — ${data.total} result(s) found.`, "ok");
+    }
+  } catch (err) {
+    showStatus("photoStatus", "Network error: " + err.message, "error");
+    hideResults();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Identify Coin";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Render helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+function hideResults() {
+  document.getElementById("results").classList.remove("show");
+}
+
+function renderResults(coins, total, title, identification) {
+  document.getElementById("resultsTitle").textContent  = title;
+  document.getElementById("resultsCount").textContent  = total + " result" + (total !== 1 ? "s" : "");
+
+  // AI identification summary
+  const aiDiv = document.getElementById("aiIdentification");
+  if (identification) {
+    aiDiv.innerHTML = buildAiBlock(identification);
+  } else {
+    aiDiv.innerHTML = "";
+  }
+
+  // Coin cards
+  const listDiv = document.getElementById("resultsList");
+  if (!coins || coins.length === 0) {
+    listDiv.innerHTML = `
+      <div class="no-results">
+        <div class="nr-icon">&#x1F50D;</div>
+        <p>No coins matched your search. Try different keywords.</p>
+      </div>`;
+  } else {
+    listDiv.innerHTML = coins.map(buildCoinCard).join("");
+  }
+
+  document.getElementById("results").classList.add("show");
+  document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function buildAiBlock(id) {
+  const fields = [
+    { label: "Description",  val: id.description_query },
+    { label: "Year",         val: id.year          },
+    { label: "Mint Mark",    val: id.mint_mark      },
+    { label: "Denomination", val: id.denomination   },
+    { label: "Grade Est.",   val: id.grade_estimate },
+  ];
+  const gridItems = fields
+    .filter(f => f.val)
+    .map(f => `
+      <div class="ai-id-field">
+        <label>${esc(f.label)}</label>
+        <span>${esc(f.val)}</span>
+      </div>`)
+    .join("");
+
+  const notes = id.notes
+    ? `<div class="ai-id-notes">${esc(id.notes)}</div>`
+    : "";
+
+  return `
+    <div class="ai-id-block">
+      <h3>&#x1F916; AI Identification</h3>
+      <div class="ai-id-grid">${gridItems}</div>
+      ${notes}
+    </div>`;
+}
+
+function buildCoinCard(coin) {
+  const desigTag = coin.desig
+    ? `<span class="tag tag-desig">${esc(coin.desig)}</span>`
+    : "";
+  const catTag = coin.category
+    ? `<span class="tag tag-cat">${esc(coin.category)}</span>`
+    : "";
+
+  // Price table — skip rows with null price
+  const priceRows = (coin.prices || [])
+    .filter(p => p.price !== null && p.price !== undefined && p.price !== "")
+    .map(p => {
+      const formatted = formatPrice(p.price);
+      return `<tr>
+        <td class="grade">${esc(p.grade)}</td>
+        <td class="${formatted ? "price-val" : "no-price"}">${formatted || "n/a"}</td>
+      </tr>`;
+    });
+
+  const priceSection = priceRows.length
+    ? `<table class="price-table">
+         <thead><tr><th>Grade</th><th>Price</th></tr></thead>
+         <tbody>${priceRows.join("")}</tbody>
+       </table>`
+    : `<p class="no-prices">No price data available for this entry.</p>`;
+
+  return `
+    <div class="coin-card">
+      <div class="coin-header">
+        <div class="coin-name">${esc(coin.description)}</div>
+        <span class="tag tag-pcgs">PCGS# ${esc(String(coin.pcgs_num))}</span>
+        ${desigTag}
+        ${catTag}
+      </div>
+      <div class="coin-body">
+        ${priceSection}
+      </div>
+    </div>`;
+}
+
+function esc(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+</script>
+</body>
+</html>
