@@ -63,7 +63,7 @@ HEADERS = {
     "Cache-Control": "max-age=0",
 }
 
-REQUEST_DELAY = 2.0   # seconds between page requests — be polite
+REQUEST_DELAY = 5.0   # seconds between page requests — be polite
 RETRY_DELAY  = 30.0   # seconds to wait after a 429 / 5xx
 MAX_RETRIES  = 3
 
