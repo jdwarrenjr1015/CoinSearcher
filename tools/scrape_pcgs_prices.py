@@ -18,17 +18,21 @@ Workflow: workflows/scrape_pcgs_prices.md
 
 import argparse
 import csv
-import json
 import os
 import re
-import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from tqdm import tqdm
+
+load_dotenv()
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import db as _db
 
 # ---------------------------------------------------------------------------
 # Config
@@ -240,83 +244,86 @@ def scrape_category(category_url: str) -> list[dict]:
 # Database helpers
 # ---------------------------------------------------------------------------
 
-def init_db(db_path: Path) -> sqlite3.Connection:
-    """Create (or open) the SQLite database and ensure the schema exists."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS coins (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            pcgs_num    TEXT NOT NULL,
-            description TEXT,
-            desig       TEXT,
-            category    TEXT,
-            scraped_at  TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS prices (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            coin_id  INTEGER NOT NULL REFERENCES coins(id),
-            grade    TEXT NOT NULL,
-            price    REAL
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_coins_pcgs_num ON coins(pcgs_num)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_coins_description ON coins(description)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prices_coin_id ON prices(coin_id)")
+def init_db(db_path: Path = None):
+    """
+    Create (or open) the database and ensure the schema exists.
+    Uses Postgres if DATABASE_URL is set, otherwise SQLite at db_path.
+    """
+    if _db.is_postgres():
+        conn = _db.open_conn()
+    else:
+        import sqlite3
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+
+    for stmt in _db.db_schema_sql():
+        _db.execute(conn, stmt)
     conn.commit()
     return conn
 
 
-def insert_coin(conn: sqlite3.Connection, record: dict, category: str, scraped_at: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO coins (pcgs_num, description, desig, category, scraped_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (record["pcgs_num"], record["description"], record["desig"], category, scraped_at),
-    )
-    coin_id = cur.lastrowid
+def insert_coin(conn, record: dict, category: str, scraped_at: str) -> int:
+    p = _db.ph()
+    if _db.is_postgres():
+        cur = _db.execute(conn,
+            f"INSERT INTO coins (pcgs_num, description, desig, category, scraped_at) "
+            f"VALUES ({p},{p},{p},{p},{p}) RETURNING id",
+            (record["pcgs_num"], record["description"], record["desig"], category, scraped_at),
+        )
+        coin_id = cur.fetchone()[0]
+    else:
+        cur = _db.execute(conn,
+            f"INSERT INTO coins (pcgs_num, description, desig, category, scraped_at) "
+            f"VALUES ({p},{p},{p},{p},{p})",
+            (record["pcgs_num"], record["description"], record["desig"], category, scraped_at),
+        )
+        coin_id = cur.lastrowid
+
     price_rows = [
         (coin_id, grade, price)
         for grade, price in record["grades"].items()
     ]
-    conn.executemany(
-        "INSERT INTO prices (coin_id, grade, price) VALUES (?, ?, ?)",
+    _db.executemany(conn,
+        f"INSERT INTO prices (coin_id, grade, price) VALUES ({p},{p},{p})",
         price_rows,
     )
     return coin_id
 
 
-def get_scraped_categories(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute("SELECT DISTINCT category FROM coins").fetchall()
-    return {r[0] for r in rows}
+def get_scraped_categories(conn) -> set[str]:
+    rows = _db.fetchall(conn, "SELECT DISTINCT category FROM coins")
+    return {r["category"] for r in rows}
 
 
 # ---------------------------------------------------------------------------
-# CSV export
+# CSV export (SQLite only — for local use)
 # ---------------------------------------------------------------------------
 
-def export_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
-    """
-    Export the full coins + prices table to a flat CSV.
-    Each row = one coin × one grade.
-    Returns the number of rows written.
-    """
+def export_csv(conn, csv_path: Path) -> int:
+    """Export the full coins + prices table to a flat CSV (local SQLite only)."""
+    if _db.is_postgres():
+        print("  (CSV export skipped — not supported for Postgres)")
+        return 0
+
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = conn.execute("""
+    rows = _db.fetchall(conn, """
         SELECT c.pcgs_num, c.description, c.desig, c.category,
                p.grade, p.price, c.scraped_at
         FROM coins c
         JOIN prices p ON p.coin_id = c.id
         ORDER BY c.pcgs_num, p.grade
-    """).fetchall()
+    """)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["pcgs_num", "description", "desig", "category",
                          "grade", "price", "scraped_at"])
-        writer.writerows(rows)
+        writer.writerows([
+            (r["pcgs_num"], r["description"], r["desig"], r["category"],
+             r["grade"], r["price"], r["scraped_at"])
+            for r in rows
+        ])
 
     return len(rows)
 
@@ -326,20 +333,23 @@ def export_csv(conn: sqlite3.Connection, csv_path: Path) -> int:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Scrape PCGS coin prices to SQLite + CSV")
+    parser = argparse.ArgumentParser(description="Scrape PCGS coin prices to SQLite or Postgres")
     parser.add_argument("--limit",  type=int, default=None, help="Max categories to scrape")
     parser.add_argument("--resume", action="store_true", help="Skip already-scraped categories")
-    parser.add_argument("--db",     default=str(DEFAULT_DB), help="SQLite output path")
+    parser.add_argument("--db",     default=str(DEFAULT_DB), help="SQLite output path (ignored if DATABASE_URL set)")
     args = parser.parse_args()
 
-    db_path  = Path(args.db)
-    csv_path = db_path.with_suffix(".csv")
-
-    print(f"Database : {db_path}")
-    print(f"CSV      : {csv_path}")
+    if _db.is_postgres():
+        print("Database : Postgres (DATABASE_URL)")
+        csv_path = None
+    else:
+        db_path  = Path(args.db)
+        csv_path = db_path.with_suffix(".csv")
+        print(f"Database : {db_path}")
+        print(f"CSV      : {csv_path}")
     print()
 
-    conn = init_db(db_path)
+    conn = init_db(None if _db.is_postgres() else Path(args.db))
 
     # --- Step 1: Get category index ---
     print("Fetching PCGS price index...")
@@ -376,11 +386,12 @@ def main():
 
         conn.commit()  # checkpoint after each category
 
-    # --- Step 3: Export CSV ---
+    # --- Step 3: Export CSV (SQLite only) ---
     print(f"\nScraping complete. {total_coins} coin records saved.")
-    print("Exporting CSV...")
-    csv_rows = export_csv(conn, csv_path)
-    print(f"CSV written: {csv_rows} rows -> {csv_path}")
+    if csv_path:
+        print("Exporting CSV...")
+        csv_rows = export_csv(conn, csv_path)
+        print(f"CSV written: {csv_rows} rows -> {csv_path}")
 
     conn.close()
     print("\nDone.")

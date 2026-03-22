@@ -19,11 +19,16 @@ import base64
 import json
 import os
 import re
-import sqlite3
+import sys
 from pathlib import Path
+
+# Ensure tools/ is on the path when imported from api/index.py
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+
+import db as _db
 
 # ---------------------------------------------------------------------------
 # Config
@@ -31,71 +36,63 @@ from flask import Flask, jsonify, render_template, request
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH  = Path(os.getenv("DB_PATH", str(BASE_DIR / ".tmp" / "pcgs_prices.db")))
-
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-app = Flask(__name__, template_folder="templates")
+TOOLS_DIR = Path(__file__).resolve().parent
+app = Flask(__name__, template_folder=str(TOOLS_DIR / "templates"))
 
 # ---------------------------------------------------------------------------
-# Database helpers  (mirrors lookup_price.py — no import coupling)
+# Database helpers
 # ---------------------------------------------------------------------------
 
-def open_db() -> sqlite3.Connection | None:
-    """Return a DB connection or None if the database file does not exist."""
-    if not DB_PATH.exists():
-        return None
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
+def open_db():
+    return _db.open_conn()
 
 
-def db_stats(conn: sqlite3.Connection) -> dict:
-    coin_count  = conn.execute("SELECT COUNT(*) FROM coins").fetchone()[0]
-    price_count = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-    scraped_at  = conn.execute(
-        "SELECT scraped_at FROM coins ORDER BY scraped_at DESC LIMIT 1"
-    ).fetchone()
+def db_stats(conn) -> dict:
+    coin_row   = _db.fetchone(conn, "SELECT COUNT(*) AS n FROM coins")
+    price_row  = _db.fetchone(conn, "SELECT COUNT(*) AS n FROM prices")
+    latest_row = _db.fetchone(conn,
+        "SELECT scraped_at FROM coins ORDER BY scraped_at DESC LIMIT 1")
     return {
-        "coins":      coin_count,
-        "prices":     price_count,
-        "scraped_at": scraped_at[0][:10] if scraped_at else "unknown",
+        "coins":      coin_row["n"] if coin_row else 0,
+        "prices":     price_row["n"] if price_row else 0,
+        "scraped_at": (latest_row["scraped_at"][:10]
+                       if latest_row and latest_row.get("scraped_at") else "unknown"),
     }
 
 
-def search_by_pcgs_num(conn: sqlite3.Connection, pcgs_num: str) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM coins WHERE pcgs_num = ? ORDER BY desig",
+def search_by_pcgs_num(conn, pcgs_num: str) -> list[dict]:
+    p = _db.ph()
+    return _db.fetchall(conn,
+        f"SELECT * FROM coins WHERE pcgs_num = {p} ORDER BY desig",
         (pcgs_num.strip(),),
-    ).fetchall()
-    return [dict(r) for r in rows]
+    )
 
 
-def search_by_description(conn: sqlite3.Connection, query: str) -> list[dict]:
-    """All-tokens-must-match LIKE search across description column."""
+def search_by_description(conn, query: str) -> list[dict]:
     tokens = query.strip().split()
     if not tokens:
         return []
-    clauses = " AND ".join(["LOWER(description) LIKE ?"] * len(tokens))
-    params  = [f"%{t.lower()}%" for t in tokens]
-    rows = conn.execute(
+    p = _db.ph()
+    clauses = " AND ".join([f"LOWER(description) LIKE {p}"] * len(tokens))
+    params  = tuple(f"%{t.lower()}%" for t in tokens)
+    return _db.fetchall(conn,
         f"SELECT * FROM coins WHERE {clauses} ORDER BY pcgs_num, desig",
         params,
-    ).fetchall()
-    return [dict(r) for r in rows]
+    )
 
 
-def get_prices(conn: sqlite3.Connection, coin_id: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT grade, price FROM prices WHERE coin_id = ? "
+def get_prices(conn, coin_id: int) -> list[dict]:
+    p = _db.ph()
+    return _db.fetchall(conn,
+        f"SELECT grade, price FROM prices WHERE coin_id = {p} "
         "ORDER BY CAST(REPLACE(REPLACE(grade,'MS',''),'PF','') AS REAL)",
         (coin_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
+    )
 
 
-def coins_to_json(conn: sqlite3.Connection, coins: list[dict]) -> list[dict]:
+def coins_to_json(conn, coins: list[dict]) -> list[dict]:
     """Attach prices to each coin dict."""
     result = []
     for coin in coins[:50]:  # hard cap to avoid enormous payloads
