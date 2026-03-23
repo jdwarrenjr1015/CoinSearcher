@@ -182,6 +182,29 @@ def identify_coin_with_claude(image_bytes: bytes, media_type: str) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
+@app.route("/debug")
+def debug():
+    import os
+    db_url = os.getenv("DATABASE_URL", "")
+    result = {"DATABASE_URL_set": bool(db_url)}
+    if db_url:
+        result["DATABASE_URL_prefix"] = db_url[:30] + "..."
+        try:
+            import psycopg2
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM coins")
+            result["coins"] = cur.fetchone()[0]
+            conn.close()
+            result["status"] = "ok"
+        except Exception as e:
+            result["status"] = "error"
+            result["error"] = str(e)
+    else:
+        result["status"] = "no DATABASE_URL"
+    return result
+
+
 @app.route("/")
 def index():
     conn  = open_db()
