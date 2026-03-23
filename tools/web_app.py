@@ -264,18 +264,15 @@ def identify():
     if photo.filename == "":
         return jsonify({"error": "Empty filename"}), 400
 
-    # Determine media type
-    filename   = photo.filename.lower()
-    if filename.endswith(".png"):
+    # Determine media type — prefer Content-Type header, fall back to extension
+    ct = photo.content_type or ""
+    filename = photo.filename.lower()
+    if "png" in ct or filename.endswith(".png"):
         media_type = "image/png"
-    elif filename.endswith((".jpg", ".jpeg")):
-        media_type = "image/jpeg"
-    elif filename.endswith(".webp"):
+    elif "webp" in ct or filename.endswith(".webp"):
         media_type = "image/webp"
-    elif filename.endswith(".gif"):
-        media_type = "image/gif"
     else:
-        return jsonify({"error": "Unsupported image format. Use JPG or PNG."}), 400
+        media_type = "image/jpeg"  # default for camera blobs and JPEGs
 
     image_bytes = photo.read()
 

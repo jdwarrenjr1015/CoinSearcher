@@ -515,14 +515,35 @@ dropZone.addEventListener("drop", e => {
   if (f) loadPreview(f);
 });
 
-function loadPreview(file) {
-  selectedFile = file;
+function compressImage(file, maxPx, quality) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.width, h = img.height;
+      if (w > maxPx || h > maxPx) {
+        if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
+        else       { w = Math.round(w * maxPx / h); h = maxPx; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve(blob), "image/jpeg", quality);
+    };
+    img.src = url;
+  });
+}
+
+async function loadPreview(file) {
+  // Compress to max 1024px / 0.82 quality so we stay under Vercel's 4.5MB limit
+  selectedFile = await compressImage(file, 1024, 0.82);
   const reader = new FileReader();
   reader.onload = ev => {
     previewImg.src = ev.target.result;
     previewImg.classList.add("visible");
   };
-  reader.readAsDataURL(file);
+  reader.readAsDataURL(selectedFile);
   document.getElementById("identifyBtn").disabled = false;
   document.getElementById("clearPhotoBtn").style.display = "";
   hideStatus("photoStatus");
