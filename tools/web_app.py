@@ -184,24 +184,24 @@ def identify_coin_with_claude(image_bytes: bytes, media_type: str) -> dict:
 
 @app.route("/debug")
 def debug():
-    import os
-    db_url = os.getenv("DATABASE_URL", "")
-    result = {"DATABASE_URL_set": bool(db_url)}
+    db_url = _db._get_db_url()
+    result = {
+        "db_url_found": bool(db_url),
+        "db_url_prefix": (db_url[:40] + "...") if db_url else None,
+        "env_vars": {k: "set" for k in ["DATABASE_URL","POSTGRES_URL","NILEDB_POSTGRES_URL","NILEDB_URL"] if os.getenv(k)},
+    }
     if db_url:
-        result["DATABASE_URL_prefix"] = db_url[:30] + "..."
         try:
-            import psycopg2
-            conn = psycopg2.connect(db_url)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM coins")
-            result["coins"] = cur.fetchone()[0]
+            conn = _db.open_conn()
+            row = _db.fetchone(conn, "SELECT COUNT(*) AS cnt FROM coins")
+            result["coins"] = row["cnt"]
             conn.close()
             result["status"] = "ok"
         except Exception as e:
             result["status"] = "error"
             result["error"] = str(e)
     else:
-        result["status"] = "no DATABASE_URL"
+        result["status"] = "no db url found"
     return result
 
 

@@ -16,8 +16,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+def _get_db_url() -> str:
+    """Check several common env var names so both local and Vercel work."""
+    return (
+        os.getenv("DATABASE_URL") or
+        os.getenv("POSTGRES_URL") or
+        os.getenv("NILEDB_POSTGRES_URL") or
+        os.getenv("NILEDB_URL") or
+        ""
+    )
+
+
 def is_postgres() -> bool:
-    return bool(os.getenv("DATABASE_URL", ""))
+    return bool(_get_db_url())
 
 
 def _sqlite_path() -> Path:
@@ -30,7 +41,7 @@ def open_conn():
     Return a live database connection, or None if the DB doesn't exist yet.
     Postgres uses pg8000.dbapi2 (pure Python, works on Vercel).
     """
-    db_url = os.getenv("DATABASE_URL", "")
+    db_url = _get_db_url()
     if db_url:
         import pg8000.dbapi as pg
         p = urlparse(db_url)
@@ -55,7 +66,7 @@ def open_conn():
 
 def ph() -> str:
     """Return the parameter placeholder for the active DB driver."""
-    return "%s" if is_postgres() else "?"
+    return "%s" if _get_db_url() else "?"
 
 
 def _rows_to_dicts(cur) -> list[dict]:
