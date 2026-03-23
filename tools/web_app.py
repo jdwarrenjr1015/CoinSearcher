@@ -207,10 +207,18 @@ def debug():
 
 @app.route("/")
 def index():
-    conn  = open_db()
+    import os
+    conn = None
+    conn_error = None
+    try:
+        conn = open_db()
+    except Exception as e:
+        conn_error = str(e)
     stats = db_stats(conn) if conn else None
     if conn:
         conn.close()
+    if conn_error:
+        return f"<pre>DB connection error: {conn_error}\nDATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}</pre>", 500
     return render_template("index.html", stats=stats)
 
 
