@@ -3,7 +3,7 @@ db.py
 -----
 Database abstraction layer — works with both SQLite (local) and Postgres (Vercel).
 
-If DATABASE_URL env var is set  → uses psycopg2 (Postgres)
+If DATABASE_URL env var is set  → uses pg8000 (pure-Python Postgres, works on Vercel)
 Otherwise                       → uses sqlite3 (local .tmp/pcgs_prices.db)
 
 Usage:
@@ -13,6 +13,8 @@ Usage:
 import os
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlparse
+
 
 def is_postgres() -> bool:
     return bool(os.getenv("DATABASE_URL", ""))
@@ -26,15 +28,20 @@ def _sqlite_path() -> Path:
 def open_conn():
     """
     Return a live database connection, or None if the DB doesn't exist yet.
-
-    For SQLite: returns a sqlite3.Connection (row_factory set to sqlite3.Row)
-    For Postgres: returns a psycopg2 connection (raises on failure)
+    Postgres uses pg8000.dbapi2 (pure Python, works on Vercel).
     """
-    # Re-read at call time so Vercel env vars are always picked up
     db_url = os.getenv("DATABASE_URL", "")
     if db_url:
-        import psycopg2
-        conn = psycopg2.connect(db_url)
+        import pg8000.dbapi as pg
+        p = urlparse(db_url)
+        conn = pg.connect(
+            host=p.hostname,
+            port=p.port or 5432,
+            database=p.path.lstrip("/"),
+            user=p.username,
+            password=p.password,
+            ssl_context=True,
+        )
         return conn
 
     db_path = _sqlite_path()
@@ -48,27 +55,32 @@ def open_conn():
 
 def ph() -> str:
     """Return the parameter placeholder for the active DB driver."""
-    return "%s" if os.getenv("DATABASE_URL", "") else "?"
+    return "%s" if is_postgres() else "?"
+
+
+def _rows_to_dicts(cur) -> list[dict]:
+    """Convert pg8000 cursor rows (tuples) to dicts using column names."""
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
 def fetchall(conn, sql: str, params: tuple = ()) -> list[dict]:
     """Execute a SELECT and return all rows as dicts."""
     if is_postgres():
-        import psycopg2.extras
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         cur.execute(sql, params)
-        return [dict(r) for r in cur.fetchall()]
+        return _rows_to_dicts(cur)
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def fetchone(conn, sql: str, params: tuple = ()) -> dict | None:
     """Execute a SELECT and return the first row as a dict, or None."""
     if is_postgres():
-        import psycopg2.extras
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         cur.execute(sql, params)
+        cols = [d[0] for d in cur.description]
         row = cur.fetchone()
-        return dict(row) if row else None
+        return dict(zip(cols, row)) if row else None
     row = conn.execute(sql, params).fetchone()
     return dict(row) if row else None
 
@@ -78,27 +90,19 @@ def execute(conn, sql: str, params: tuple = ()):
     if is_postgres():
         cur = conn.cursor()
         cur.execute(sql, params)
+        conn.commit()
         return cur
     return conn.execute(sql, params)
 
 
 def executemany(conn, sql: str, rows: list):
-    """Execute a batch INSERT."""
+    """Execute a batch of statements."""
     if is_postgres():
-        import psycopg2.extras
         cur = conn.cursor()
-        psycopg2.extras.execute_batch(cur, sql, rows)
+        cur.executemany(sql, rows)
+        conn.commit()
         return cur
     return conn.executemany(sql, rows)
-
-
-def lastrowid(conn) -> int | None:
-    """Get the last inserted row ID (Postgres needs RETURNING id)."""
-    # For Postgres, use execute() with RETURNING id in the SQL instead.
-    # This is only meaningful for SQLite.
-    if is_postgres():
-        raise NotImplementedError("Use INSERT ... RETURNING id for Postgres")
-    return None  # caller uses conn.execute().lastrowid directly
 
 
 def db_schema_sql() -> list[str]:
