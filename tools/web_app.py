@@ -41,6 +41,15 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 TOOLS_DIR = Path(__file__).resolve().parent
 app = Flask(__name__, template_folder=str(TOOLS_DIR / "templates"))
 
+
+@app.errorhandler(Exception)
+def json_error(e):
+    """Return JSON for all unhandled errors so JS never gets HTML."""
+    import traceback
+    code = getattr(e, "code", 500)
+    return jsonify({"error": str(e), "trace": traceback.format_exc()[-500:]}), code
+
+
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
@@ -149,7 +158,7 @@ def identify_coin_with_claude(image_bytes: bytes, media_type: str) -> dict:
     )
 
     message = client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=512,
         messages=[
             {
