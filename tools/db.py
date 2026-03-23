@@ -14,11 +14,8 @@ import os
 import sqlite3
 from pathlib import Path
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-
-
 def is_postgres() -> bool:
-    return bool(DATABASE_URL)
+    return bool(os.getenv("DATABASE_URL", ""))
 
 
 def _sqlite_path() -> Path:
@@ -31,11 +28,13 @@ def open_conn():
     Return a live database connection, or None if the DB doesn't exist yet.
 
     For SQLite: returns a sqlite3.Connection (row_factory set to sqlite3.Row)
-    For Postgres: returns a psycopg2 connection
+    For Postgres: returns a psycopg2 connection (raises on failure)
     """
-    if is_postgres():
+    # Re-read at call time so Vercel env vars are always picked up
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
         import psycopg2
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(db_url)
         return conn
 
     db_path = _sqlite_path()
@@ -49,7 +48,7 @@ def open_conn():
 
 def ph() -> str:
     """Return the parameter placeholder for the active DB driver."""
-    return "%s" if is_postgres() else "?"
+    return "%s" if os.getenv("DATABASE_URL", "") else "?"
 
 
 def fetchall(conn, sql: str, params: tuple = ()) -> list[dict]:
