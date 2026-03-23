@@ -16,73 +16,59 @@ Workflow: workflows/scrape_pcgs_prices.md
 
 import argparse
 import re
-import sqlite3
+import sys
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-DEFAULT_DB = Path(".tmp/pcgs_prices.db")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import db as _db
 
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
 
-def open_db(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
-        raise FileNotFoundError(
-            f"Database not found: {db_path}\n"
-            "Run  python tools/scrape_pcgs_prices.py  first to build it."
-        )
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def list_categories(conn: sqlite3.Connection) -> list[str]:
-    rows = conn.execute(
-        "SELECT DISTINCT category FROM coins ORDER BY category"
-    ).fetchall()
+def list_categories(conn) -> list[str]:
+    rows = _db.fetchall(conn, "SELECT DISTINCT category FROM coins ORDER BY category")
     return [r["category"] for r in rows]
 
 
-def search_by_pcgs_num(conn: sqlite3.Connection, pcgs_num: str) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM coins WHERE pcgs_num = ? ORDER BY desig",
+def search_by_pcgs_num(conn, pcgs_num: str) -> list[dict]:
+    return _db.fetchall(conn,
+        f"SELECT * FROM coins WHERE pcgs_num = {_db.ph()} ORDER BY desig",
         (pcgs_num.strip(),),
-    ).fetchall()
+    )
 
 
-def search_by_description(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
+def search_by_description(conn, query: str) -> list[dict]:
     """Full-text style search using LIKE — case-insensitive."""
     tokens = query.strip().split()
     if not tokens:
         return []
-    # Build a WHERE clause that requires all tokens to appear somewhere in description
-    clauses = " AND ".join(["LOWER(description) LIKE ?"] * len(tokens))
+    clauses = " AND ".join([f"LOWER(description) LIKE {_db.ph()}"] * len(tokens))
     params  = [f"%{t.lower()}%" for t in tokens]
-    return conn.execute(
+    return _db.fetchall(conn,
         f"SELECT * FROM coins WHERE {clauses} ORDER BY pcgs_num, desig",
         params,
-    ).fetchall()
+    )
 
 
-def get_prices(conn: sqlite3.Connection, coin_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT grade, price FROM prices WHERE coin_id = ? ORDER BY "
-        # Sort numerically where possible
+def get_prices(conn, coin_id: int) -> list[dict]:
+    return _db.fetchall(conn,
+        f"SELECT grade, price FROM prices WHERE coin_id = {_db.ph()} ORDER BY "
         "CAST(REPLACE(grade, 'MS', '') AS REAL)",
         (coin_id,),
-    ).fetchall()
+    )
 
 
-def db_stats(conn: sqlite3.Connection) -> dict:
-    coin_count = conn.execute("SELECT COUNT(*) FROM coins").fetchone()[0]
-    price_count = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-    scraped_at = conn.execute(
-        "SELECT scraped_at FROM coins ORDER BY scraped_at DESC LIMIT 1"
-    ).fetchone()
+def db_stats(conn) -> dict:
+    coin_row  = _db.fetchone(conn, "SELECT COUNT(*) AS cnt FROM coins")
+    price_row = _db.fetchone(conn, "SELECT COUNT(*) AS cnt FROM prices")
+    last_row  = _db.fetchone(conn, "SELECT scraped_at FROM coins ORDER BY scraped_at DESC LIMIT 1")
     return {
-        "coins":      coin_count,
-        "prices":     price_count,
-        "scraped_at": scraped_at[0] if scraped_at else "unknown",
+        "coins":      coin_row["cnt"] if coin_row else 0,
+        "prices":     price_row["cnt"] if price_row else 0,
+        "scraped_at": last_row["scraped_at"] if last_row else "unknown",
     }
 
 
@@ -173,15 +159,9 @@ def main():
     parser.add_argument("query",            nargs="?",       help="Search term or PCGS number")
     parser.add_argument("--pcgs",           metavar="NUM",   help="Lookup by PCGS number directly")
     parser.add_argument("--list-categories",action="store_true", help="List all scraped categories")
-    parser.add_argument("--db",             default=str(DEFAULT_DB), help="SQLite path")
     args = parser.parse_args()
 
-    db_path = Path(args.db)
-    try:
-        conn = open_db(db_path)
-    except FileNotFoundError as e:
-        print(e)
-        return
+    conn = _db.open_conn()
 
     if args.list_categories:
         cats = list_categories(conn)
